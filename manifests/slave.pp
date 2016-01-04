@@ -54,6 +54,11 @@
 # [*java_version*]
 #   Specified which version of java will be used.
 #
+# [*description*]
+#   Not required.  Description which will appear on the jenkins master UI.
+#
+# [*manage_client_jar*]
+#   Should the class download the client jar file from the web? Defaults to true.
 
 # === Examples
 #
@@ -72,8 +77,9 @@
 # Copyright 2013 Matthew Barr , but can be used for anything by anyone..
 class jenkins::slave (
   $slave_name               = undef,
+  $description              = undef,
   $masterurl                = undef,
-  $autodiscoveryaddress      = undef,
+  $autodiscoveryaddress     = undef,
   $ui_user                  = undef,
   $ui_pass                  = undef,
   $version                  = $jenkins::params::swarm_version,
@@ -87,94 +93,157 @@ class jenkins::slave (
   $labels                   = undef,
   $tool_locations           = undef,
   $install_java             = $jenkins::params::install_java,
+  $manage_client_jar        = true,
   $ensure                   = 'running',
-  $enable                   = true
+  $enable                   = true,
+  $source                   = undef,
 ) inherits jenkins::params {
 
-  $client_jar = "swarm-client-${version}-jar-with-dependencies.jar"
-  $client_url = "http://maven.jenkins-ci.org/content/repositories/releases/org/jenkins-ci/plugins/swarm-client/${version}/"
+  validate_string($tool_locations)
 
-  if $install_java {
+  $client_jar = "swarm-client-${version}-jar-with-dependencies.jar"
+  $client_url = $source ? {
+    undef   => "http://maven.jenkins-ci.org/content/repositories/releases/org/jenkins-ci/plugins/swarm-client/${version}/",
+    default => $source,
+  }
+  $quoted_ui_user = shellquote($ui_user)
+  $quoted_ui_pass = shellquote($ui_pass)
+
+
+  if $install_java and ($::osfamily != 'Darwin') {
+    # Currently the puppetlabs/java module doesn't support installing Java on
+    # Darwin
     class { 'java':
       distribution => 'jdk',
     }
   }
 
-#add jenkins slave user if necessary.
-  if $manage_slave_user and $slave_uid {
-    user { 'jenkins-slave_user':
-      ensure     => present,
-      name       => $slave_user,
-      comment    => 'Jenkins Slave user',
-      home       => $slave_home,
-      managehome => true,
-      uid        => $slave_uid,
-    }
-  }
-
-  if ($manage_slave_user) and (! $slave_uid) {
-    user { 'jenkins-slave_user':
-      ensure     => present,
-      name       => $slave_user,
-      comment    => 'Jenkins Slave user',
-      home       => $slave_home,
-      managehome => true,
-    }
-  }
-
-  exec { 'get_swarm_client':
-    command => "wget -O ${slave_home}/${client_jar} ${client_url}/${client_jar}",
-    path    => '/usr/bin:/usr/sbin:/bin:/usr/local/bin',
-    user    => $slave_user,
-  #refreshonly => true,
-    creates => "${slave_home}/${client_jar}",
-  ## needs to be fixed if you create another version..
-  }
-
-# customizations based on the OS family
+  # customizations based on the OS family
   case $::osfamily {
     'Debian': {
       $defaults_location = '/etc/default'
 
-      package { 'daemon':
-        ensure => present,
-        before => Service['jenkins-slave'],
-      }
+      ensure_packages(['daemon'])
+      Package['daemon'] -> Service['jenkins-slave']
+    }
+    'Darwin': {
+      $defaults_location = $slave_home
     }
     default: {
       $defaults_location = '/etc/sysconfig'
     }
   }
 
-  file { '/etc/init.d/jenkins-slave':
-    ensure => 'file',
-    mode   => '0755',
-    owner  => 'root',
-    group  => 'root',
-    source => "puppet:///modules/${module_name}/jenkins-slave.${::osfamily}",
-    notify => Service['jenkins-slave'],
+  case $::kernel {
+    'Linux': {
+      $fetch_command  = "wget -O ${slave_home}/${client_jar} ${client_url}/${client_jar}"
+      $service_name   = 'jenkins-slave'
+      $defaults_user  = 'root'
+      $defaults_group = 'root'
+      $manage_user_home = true
+
+      file { '/etc/init.d/jenkins-slave':
+        ensure => 'file',
+        mode   => '0755',
+        owner  => 'root',
+        group  => 'root',
+        source => "puppet:///modules/${module_name}/jenkins-slave.${::osfamily}",
+        notify => Service['jenkins-slave'],
+      }
+    }
+    'Darwin': {
+      $fetch_command    = "curl -O ${client_url}/${client_jar}"
+      $service_name     = 'org.jenkins-ci.slave.jnlp'
+      $defaults_user    = 'jenkins'
+      $defaults_group   = 'wheel'
+      $manage_user_home = false
+
+      file { "${slave_home}/start-slave.sh":
+        ensure  => 'file',
+        content => template("${module_name}/start-slave.sh.erb"),
+        mode    => '0755',
+        owner   => 'root',
+        group   => 'wheel',
+      }
+
+      file { '/Library/LaunchDaemons/org.jenkins-ci.slave.jnlp.plist':
+        ensure  => 'file',
+        content => template("${module_name}/org.jenkins-ci.slave.jnlp.plist.erb"),
+        mode    => '0644',
+        owner   => 'root',
+        group   => 'wheel',
+      }
+
+      file { '/var/log/jenkins':
+        ensure => 'directory',
+        owner  => $slave_user,
+      }
+
+      if $manage_slave_user {
+        # osx doesn't have managehome support, so create directory
+        file { $slave_home:
+          ensure  => directory,
+          mode    => '0755',
+          owner   => $slave_user,
+          require => User['jenkins-slave_user'],
+        }
+      }
+
+      File['/var/log/jenkins'] ->
+        File['/Library/LaunchDaemons/org.jenkins-ci.slave.jnlp.plist'] ->
+          Service['jenkins-slave']
+    }
+    default: { }
+  }
+
+  #a Add jenkins slave user if necessary.
+  if $manage_slave_user {
+    user { 'jenkins-slave_user':
+      ensure     => present,
+      name       => $slave_user,
+      comment    => 'Jenkins Slave user',
+      home       => $slave_home,
+      managehome => $manage_user_home,
+      system     => true,
+      uid        => $slave_uid,
+    }
   }
 
   file { "${defaults_location}/jenkins-slave":
     ensure  => 'file',
     mode    => '0600',
-    owner   => 'root',
-    group   => 'root',
+    owner   => $defaults_user,
+    group   => $defaults_group,
     content => template("${module_name}/jenkins-slave-defaults.erb"),
     notify  => Service['jenkins-slave'],
   }
 
+  if ($manage_client_jar) {
+    exec { 'get_swarm_client':
+      command => $fetch_command,
+      path    => '/usr/bin:/usr/sbin:/bin:/usr/local/bin',
+      user    => $slave_user,
+      creates => "${slave_home}/${client_jar}",
+      cwd     => $slave_home,
+      #refreshonly  => true,
+    ## needs to be fixed if you create another version..
+    }
+  }
+
   service { 'jenkins-slave':
     ensure     => $ensure,
+    name       => $service_name,
     enable     => $enable,
     hasstatus  => true,
     hasrestart => true,
   }
 
-  Exec['get_swarm_client']
-  -> Service['jenkins-slave']
+  if ($manage_client_jar) {
+    Exec['get_swarm_client'] ->
+    Service['jenkins-slave']
+  }
 
-  if $install_java {
+  if $install_java and ($::osfamily != 'Darwin') {
     Class['java'] ->
     Service['jenkins-slave']
   }

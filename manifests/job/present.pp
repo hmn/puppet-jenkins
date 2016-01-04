@@ -17,8 +17,12 @@ define jenkins::job::present(
   $config,
   $jobname  = $title,
   $enabled  = 1,
+  $difftool = '/usr/bin/diff -b -q',
 ){
   include jenkins::cli
+  include jenkins::cli::reload
+
+  validate_string($difftool)
 
   if $jenkins::service_ensure == 'stopped' or $jenkins::service_ensure == false {
     fail('Management of Jenkins jobs requires \$jenkins::service_ensure to be set to \'running\'')
@@ -26,14 +30,18 @@ define jenkins::job::present(
 
   $jenkins_cli        = $jenkins::cli::cmd
   $tmp_config_path    = "/tmp/${jobname}-config.xml"
-  $job_dir            = "/var/lib/jenkins/jobs/${jobname}"
+  $job_dir            = "${::jenkins::job_dir}/${jobname}"
   $config_path        = "${job_dir}/config.xml"
+
+  # Bring variables from Class['::jenkins'] into local scope.
+  $cli_tries          = $::jenkins::cli_tries
+  $cli_try_sleep   = $::jenkins::cli_try_sleep
 
   Exec {
     logoutput   => false,
     path        => '/bin:/usr/bin:/sbin:/usr/sbin',
-    tries       => 5,
-    try_sleep   => 5,
+    tries       => $cli_tries,
+    try_sleep   => $cli_try_sleep,
   }
 
   #
@@ -73,7 +81,7 @@ define jenkins::job::present(
   exec { "jenkins update-job ${jobname}":
     command => "${cat_config} | ${update_job}",
     onlyif  => "test -e ${config_path}",
-    unless  => "diff -b -q ${config_path} ${tmp_config_path}",
+    unless  => "${difftool} ${config_path} ${tmp_config_path}",
     require => File[$tmp_config_path],
     notify  => Exec['reload-jenkins'],
   }

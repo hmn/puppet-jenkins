@@ -2,6 +2,19 @@ require 'spec_helper'
 
 describe 'jenkins::job' do
   let(:title) { 'myjob' }
+  let(:facts) {{ :osfamily => 'RedHat', :operatingsystem => 'RedHat' }}
+
+  describe 'relationships' do
+    let(:params) {{ :config => '' }}
+    it do
+      should contain_jenkins__job('myjob').
+        that_requires('Class[jenkins::cli]')
+    end
+    it do
+      should contain_jenkins__job('myjob').
+        that_comes_before('Anchor[jenkins::end]')
+    end
+  end
 
   describe 'with defaults' do
     let(:params) {{ :config => '' }}
@@ -46,6 +59,17 @@ describe 'jenkins::job' do
     it { should_not contain_exec('jenkins enable-job myjob') }
     it { should_not contain_exec('jenkins disable-job myjob') }
     it { should contain_exec('jenkins delete-job myjob') }
+  end
+
+  describe 'with an invalid $difftool' do
+    let(:params) do
+      {
+        :config => '',
+        :difftool => true
+      }
+    end
+
+    it { should_not compile }
   end
 
   describe 'with unformatted config' do
@@ -111,6 +135,27 @@ eos
   describe 'with sourced config and no regular config' do
     let(:thesource) { File.expand_path(File.dirname(__FILE__) + '/../fixtures/testjob.xml') }
     let(:params) {{ :ensure => 'present', :source => thesource }}
+    it { should raise_error(Puppet::Error, /Must pass config/) }
+  end
+
+  describe 'with templated config and blank regular config' do
+    let(:thetemplate) { File.expand_path(File.dirname(__FILE__) + '/../fixtures/testjob.xml') }
+    let(:params) {{ :ensure => 'present', :template => thetemplate, :config => '' }}
+    it { should contain_file('/tmp/myjob-config.xml')\
+      .with_content(/sourcedconfig/) }
+  end
+
+  describe 'with templated config and regular config' do
+    quotes = "<xml version='1.0' encoding='UTF-8'></xml>"
+    let(:thetemplate) { File.expand_path(File.dirname(__FILE__) + '/../fixtures/testjob.xml') }
+    let(:params) {{ :ensure => 'present', :template => thetemplate, :config => quotes }}
+    it { should contain_file('/tmp/myjob-config.xml')\
+      .with_content(/sourcedconfig/) }
+  end
+
+  describe 'with templated config and no regular config' do
+    let(:thetemplate) { File.expand_path(File.dirname(__FILE__) + '/../fixtures/testjob.xml') }
+    let(:params) {{ :ensure => 'present', :template => thetemplate }}
     it { should raise_error(Puppet::Error, /Must pass config/) }
   end
 

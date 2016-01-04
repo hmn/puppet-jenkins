@@ -44,8 +44,25 @@
 # config_hash = undef (Default)
 #   Hash with config options to set in sysconfig/jenkins defaults/jenkins
 #
+# localstatedir = '/var/lib/jenkins' (default)
+#   base path, in the autoconf sense, for jenkins local data including jobs and
+#   plugins
+#
 # executors = undef (Default)
 #   Integer number of executors on the Jenkin's master.
+#
+# slaveagentport = undef (Default)
+#   Integer number of portnumber for the slave agent.
+#
+# manage_user = true (default)
+#
+# user = 'jenkins' (default)
+#`  system user that owns the jenkins master's files
+#
+# manage_group = true (default)
+#
+# group = 'jenkins' (default)
+#`  system group that owns the jenkins master's files
 #
 # Example use
 #
@@ -118,6 +135,11 @@
 #   - CLI installation (both implicit and explicit) requires the unzip command
 #
 #
+# cli_ssh_keyfile = undef (default)
+#   Provides the location of an ssh private key file to make authenticated
+#   connections to the Jenkins CLI.
+#
+#
 # cli_tries = 10 (default)
 #   Retries until giving up talking to jenkins API
 #
@@ -125,6 +147,8 @@
 # cli_try_sleep = 10 (default)
 #   Seconds between tries to contact jenkins API
 #
+# repo_proxy = undef (default)
+#   If you environment requires a proxy to download packages
 #
 # proxy_host = undef (default)
 # proxy_port = undef (default)
@@ -135,6 +159,10 @@
 #   List of hostname patterns to skip using the proxy.
 #   - Accepts input as array only.
 #   - Only effective if "proxy_host" and "proxy_port" are set.
+#
+# user = 'jenkins' (default)
+#
+# group = 'jenkins' (default)
 #
 #
 class jenkins(
@@ -153,15 +181,23 @@ class jenkins(
   $user_hash          = {},
   $configure_firewall = undef,
   $install_java       = $jenkins::params::install_java,
+  $repo_proxy         = undef,
   $proxy_host         = undef,
   $proxy_port         = undef,
   $no_proxy_list      = undef,
   $cli                = undef,
+  $cli_ssh_keyfile    = undef,
   $cli_tries          = $jenkins::params::cli_tries,
   $cli_try_sleep      = $jenkins::params::cli_try_sleep,
   $port               = $jenkins::params::port,
   $libdir             = $jenkins::params::libdir,
+  $localstatedir      = $::jenkins::params::localstatedir,
   $executors          = undef,
+  $slaveagentport     = undef,
+  $manage_user        = $::jenkins::params::manage_user,
+  $user               = $::jenkins::params::user,
+  $manage_group       = $::jenkins::params::manage_group,
+  $group              = $::jenkins::params::group,
 ) inherits jenkins::params {
 
   validate_bool($lts, $install_java, $repo)
@@ -171,6 +207,8 @@ class jenkins(
     validate_bool($configure_firewall)
   }
 
+  validate_absolute_path($localstatedir)
+
   if $no_proxy_list {
     validate_array($no_proxy_list)
   }
@@ -178,6 +216,14 @@ class jenkins(
   if $executors {
     validate_integer($executors)
   }
+
+  validate_bool($manage_user)
+  validate_string($user)
+  validate_bool($manage_group)
+  validate_string($group)
+
+  $plugin_dir = "${localstatedir}/plugins"
+  $job_dir = "${localstatedir}/jobs"
 
   anchor {'jenkins::begin':}
   anchor {'jenkins::end':}
@@ -226,7 +272,6 @@ class jenkins(
 
   if $cli {
     include jenkins::cli
-    include jenkins::cli::reload
   }
 
   if $executors {
@@ -240,6 +285,18 @@ class jenkins(
         Class['jenkins::jobs']
   }
 
+  if ($slaveagentport != undef) {
+    validate_integer($slaveagentport)
+    jenkins::cli::exec { 'set_slaveagent_port':
+      command => ['set_slaveagent_port', $slaveagentport],
+      unless  => "[ \$(\$HELPER_CMD get_slaveagent_port) -eq ${slaveagentport} ]"
+    }
+
+    Class['jenkins::cli'] ->
+      Jenkins::Cli::Exec['set_slaveagent_port'] ->
+        Class['jenkins::jobs']
+  }
+
   Anchor['jenkins::begin'] ->
     Class[$jenkins_package_class] ->
       Class['jenkins::config'] ->
@@ -247,15 +304,6 @@ class jenkins(
           Class['jenkins::service'] ->
             Class['jenkins::jobs'] ->
               Anchor['jenkins::end']
-
-  if $cli {
-    Anchor['jenkins::begin'] ->
-      Class['jenkins::service'] ->
-        Class['jenkins::cli'] ->
-          Class['jenkins::cli::reload'] ->
-            Class['jenkins::jobs'] ->
-              Anchor['jenkins::end']
-  }
 
   if $install_java {
     Anchor['jenkins::begin'] ->

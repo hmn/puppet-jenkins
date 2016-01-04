@@ -1,8 +1,31 @@
 # puppet-jenkins
 
+[![Build Status](https://travis-ci.org/jenkinsci/puppet-jenkins.svg?branch=master)](https://travis-ci.org/jenkinsci/puppet-jenkins)
+
 This is intended to be a re-usable
 [Puppet](http://www.puppetlabs.com/puppet/introduction/) module that you can
 include in your own tree.
+
+# Experimental Types and Providers
+
+_The experimental types/providers are **not for the faint of heart**. If you are
+starting out with this module you probably want to skip directly to [Getting
+Started](#getting-started)._
+
+A family of experimental native types and providers has been added to this
+module, in parallel to the existing classes and defined types, with the goal of
+soliciting feedback.  One of the primary benefits of these new types is not
+requiring manifest changes to manage jenkins with or without "security"
+enabled.  The goal is to eventually replace the functionality of the existing
+classes/defines with the new types.  _Usage feedback (positive and negative),
+bug reports and/or PRs would be greatly welcomed._
+
+**The semantics and API of these types should be considered _unstable_ and
+almost certainly will change based on feedback.  It is currently unclear if
+these types will be considered part of the public API or treated as private to
+the module.**
+
+See [NATIVE_TYPES_AND_PROVIDERS.md](NATIVE_TYPES_AND_PROVIDERS.md)
 
 # Using puppet-jenkins
 
@@ -63,7 +86,7 @@ will download and install the plugin "[by
 hand](https://wiki.jenkins-ci.org/display/JENKINS/Plugins#Plugins-Byhand)"
 
 The names of the plugins can be found on the [update
-site](http://updates.jenkins-ci.org/download/plugins)
+site](https://updates.jenkins-ci.org/download/plugins)
 
 #### Latest
 
@@ -82,6 +105,24 @@ If you need to peg a specific version, simply specify that as a string, i.e.:
 ```puppet
   jenkins::plugin { 'git':
     version => '1.1.11',
+  }
+```
+
+Note that plugin will timeout if it takes longer than 120 seconds to download.
+You can increase this by specifying a timeout value, i.e: `timeout => 240`.
+
+#### Verifying
+
+This module will download the jenkins modules over HTTP, without SSL.
+In order to add some verification regarding the downloaded file, you
+can specify a checksum. You can also define a checksum type with
+'digest_type' (default to sha1 if unspecified) ie.:
+
+```puppet
+  jenkins::plugin { 'git':
+    version       => '2.2.12',
+    digest_string => '48141822e0eea1faa1a1a99b35372494e7352c2746ca3aa3a19a07f34b021848d2cd0bffc8959c1b809c5be231c1b49e9ffec0430dd68938197ac0f34588ee25',
+    digest_type   => 'sha512',
   }
 ```
 
@@ -134,6 +175,7 @@ The dependencies for this module currently are:
 * [java module](http://github.com/puppetlabs/puppetlabs-java)
 * [zypprepo](https://forge.puppetlabs.com/darin/zypprepo) (for Suse users)
 * [staging module](https://forge.puppetlabs.com/nanliu/staging)
+* [archive module](https://forge.puppetlabs.com/camptocamp/archive)
 
 ### Depending on Jenkins
 
@@ -178,12 +220,17 @@ credentials.
 ### CLI Helper
 
 The CLI helper assumes unauthenticated access unless configured otherwise.
-You can configure jenkins::cli_helper to use an SSH key on the managed system:
+You can configure jenkins::cli_helper to use an SSH key on the managed system
+by passing the keyfile path as a class parameter:
 ```puppet
-  class {'jenkins::cli_helper':
-    ssh_keyfile => '/path/to/id_rsa',
+  class {'jenkins':
+    cli_ssh_keyfile => '/path/to/id_rsa',
   }
 ```
+
+... or via hiera:
+
+    jenkins::cli_ssh_keyfile: "/path/to/id_rsa"
 
 There's an open bug in Jenkins (JENKINS-22346) that causes authentication to
 fail when a key is used but authentication is disabled. Until the bug is fixed,
@@ -282,6 +329,24 @@ private key:
     jenkins::credentials { 'github-deploy-key':
       password            => '',
       private_key_or_path => hiera('::github_deploy_key'),
+    }
+```
+
+*_Setting a UUID:_*
+
+You can also specify a UUID to use with the credentials, which will be used to
+identify the credentials from within the job config. This is necessary when setting
+credentials for use with the [git plugin](http://docs.openstack.org/infra/jenkins-job-builder/scm.html#scm.git), for example.
+
+You can either manually generate a UUID from a site like https://www.uuidgenerator.net,
+or use the UUID from an existing user, which is accessible within the URL of the
+Jenkins console when managing an existing user's credentials.
+
+```puppet
+    jenkins::credentials { 'deploy-user':
+      password            => '',
+      private_key_or_path => hiera('::deploy_key'),
+      uuid                => hiera('::deploy_credentials_uuid'),
     }
 ```
 
